@@ -82,17 +82,53 @@ function watch(){if(!v.videoWidth)return;sx.drawImage(v,0,0,80,60);const d=sx.ge
 async function cut(blob){const b=await createImageBitmap(blob),W=b.width,H=b.height,x0=W*cfg.left/100,x1=W*(1-cfg.right/100),y0=H*cfg.top/100,y1=H*(1-cfg.bottom/100);
  const m=Math.min(x1-1,Math.max(x0+1,W*cfg.mid/100));
  return (cfg.split?[[x0,m],[m,x1]]:[[x0,x1]]).map(([a,z])=>{const c=document.createElement('canvas');c.width=z-a;c.height=y1-y0;c.getContext('2d').drawImage(b,a,y0,z-a,y1-y0,0,0,z-a,y1-y0);return c})}
+// layout: pass 1 finds confident words, grid-dilated into text zones (split where the left edge jumps); pass 2 reads each zone alone; the rest stays picture
+const med=a=>a.sort((x,y)=>x-y)[a.length>>1];
+function crop(c,x0,y0,x1,y1){const k=document.createElement('canvas');k.width=x1-x0;k.height=y1-y0;const x=k.getContext('2d');x.drawImage(c,x0,y0,k.width,k.height,0,0,k.width,k.height);
+ const d=x.getImageData(0,0,k.width,k.height).data;let n=0,s=0,q=0;for(let i=0;i<d.length;i+=40){const g=(d[i]+d[i+1]+d[i+2])/3;n++;s+=g;q+=g*g}
+ return Math.sqrt(q/n-(s/n)**2)<12?'':`<img src="${k.toDataURL('image/jpeg',.8)}">`}
+// grey divided by blurred background: removes shadows so OCR thresholds evenly
+function flat(c){const W=c.width,H=c.height,mk=(w,h)=>{const k=document.createElement('canvas');k.width=w;k.height=h;return k},s=mk(Math.ceil(W/24),Math.ceil(H/24)),o=mk(W,H),bg=mk(W,H);
+ s.getContext('2d').drawImage(c,0,0,s.width,s.height);const bx=bg.getContext('2d'),ox=o.getContext('2d');bx.imageSmoothingQuality='high';bx.drawImage(s,0,0,W,H);ox.drawImage(c,0,0);
+ const a=ox.getImageData(0,0,W,H),d=a.data,b=bx.getImageData(0,0,W,H).data;
+ for(let i=0;i<d.length;i+=4)d[i]=d[i+1]=d[i+2]=Math.min(255,(d[i]+d[i+1]+d[i+2])/((b[i]+b[i+1]+b[i+2])||1)*235);ox.putImageData(a,0,0);return o}
+function rot(c,a){const k=document.createElement('canvas'),W=k.width=c.width,H=k.height=c.height,x=k.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,W,H);x.translate(W/2,H/2);x.rotate(a);x.drawImage(c,-W/2,-H/2);return k}
+async function layout(w,c,img){let f=flat(c),d=(await w.recognize(f,{},{blocks:true})).data;const lin=()=>d.blocks.flatMap(b=>b.paragraphs.flatMap(p=>p.lines));
+ // deskew: median slope of confident long baselines
+ const a=med(lin().filter(l=>l.confidence>=80&&l.baseline.x1-l.baseline.x0>c.width*.15).map(l=>Math.atan2(l.baseline.y1-l.baseline.y0,l.baseline.x1-l.baseline.x0)))||0;
+ if(Math.abs(a)>.035){c=rot(c,-a);f=flat(c);d=(await w.recognize(f,{},{blocks:true})).data}
+ const W=c.width,H=c.height,words=lin().flatMap(l=>l.words);
+ let good=words.filter(x=>x.confidence>=80&&/[a-z]{3}/i.test(x.text));const h=med(good.map(x=>x.bbox.y1-x.bbox.y0))||20;good=good.filter(x=>(x.bbox.y1-x.bbox.y0)<h*2);
+ const s=h/2,gw=Math.ceil(W/s),gh=Math.ceil(H/s),g=new Uint8Array(gw*gh),seen=new Uint8Array(gw*gh),segs=[];
+ good.forEach(({bbox:b})=>{for(let y=Math.max(0,(b.y0/s|0)-1);y<=Math.min(gh-1,(b.y1/s|0)+1);y++)for(let x=Math.max(0,(b.x0/s|0)-3);x<=Math.min(gw-1,(b.x1/s|0)+3);x++)g[y*gw+x]=1});
+ for(let i=0;i<g.length;i++)if(g[i]&&!seen[i]){const st=[i],rows={};seen[i]=1;
+  while(st.length){const j=st.pop(),x=j%gw,y=(j-x)/gw,r=rows[y]||(rows[y]=[x,x]);r[0]=Math.min(r[0],x);r[1]=Math.max(r[1],x);
+   for(const k of [x>0&&j-1,x<gw-1&&j+1,j-gw,j+gw])if(k!==false&&k>=0&&k<g.length&&g[k]&&!seen[k]){seen[k]=1;st.push(k)}}
+  let cur;Object.keys(rows).map(Number).sort((a,b)=>a-b).forEach(y=>{const[a,b]=rows[y];
+   if(cur&&y==cur.y1+1&&Math.abs(a-cur.x0)<gw*.08){cur.x0=Math.min(cur.x0,a);cur.x1=Math.max(cur.x1,b);cur.y1=y}else segs.push(cur={x0:a,x1:b,y0:y,y1:y})})}
+ const zones=segs.map(z=>({x0:z.x0*s,y0:z.y0*s,x1:Math.min(W,(z.x1+1)*s),y1:Math.min(H,(z.y1+1)*s)}))
+  .filter(z=>good.filter(({bbox:b})=>(b.x0+b.x1)/2>z.x0&&(b.x0+b.x1)/2<z.x1&&(b.y0+b.y1)/2>z.y0&&(b.y0+b.y1)/2<z.y1).length>=3).sort((a,b)=>a.y0-b.y0);
+ if(!zones.length)return img?crop(c,0,0,W,H)||'':'';
+ const rows=[];zones.forEach(z=>{const r=rows.at(-1);r&&Math.min(z.y1,r.y1)-z.y0>Math.min(z.y1-z.y0,r.y1-r.y0)/2?(r.z.push(z),r.y1=Math.max(r.y1,z.y1)):rows.push({y0:z.y0,y1:z.y1,z:[z]})});
+ let out='',y=0;const pct=a=>(a/W*100).toFixed(1)+'%';
+ for(const r of rows){if(img&&r.y0-y>H*.04)out+=crop(c,0,y,W,r.y0);let x=0,cells='';
+  for(const z of r.z.sort((a,b)=>a.x0-b.x0)){if(img&&z.x0-x>W*.1){const p=crop(c,x,r.y0,z.x0,r.y1);if(p)cells+=`<div style="flex:0 1 ${pct(z.x0-x)}">${p}</div>`}
+   const lines=(await w.recognize(f,{rectangle:{left:z.x0|0,top:z.y0|0,width:z.x1-z.x0|0,height:z.y1-z.y0|0}},{blocks:true})).data.blocks.flatMap(b=>b.paragraphs)
+    .map(p=>p.lines.filter(l=>l.confidence>=60).map(l=>{const t=esc(l.text.trim());return l.bbox.x1>z.x1-(z.x1-z.x0)*.12?(t.endsWith('-')?t.slice(0,-1)+'\u0001':t+' '):t+'<br>'}).join('').replace(/\u0001/g,'').replace(/<br>$/,''));
+   cells+=`<div class="t">${lines.filter(Boolean).map(t=>`<p>${t}</p>`).join('')}</div>`;x=Math.max(x,z.x1)}
+  if(img&&W-x>W*.1){const p=crop(c,x,r.y0,W,r.y1);if(p)cells+=`<div style="flex:0 1 ${pct(W-x)}">${p}</div>`}
+  out+=`<div class="row">${cells}</div>`;y=r.y1}
+ if(img&&H-y>H*.04)out+=crop(c,0,y,W,H);return out}
 const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const load=src=>new Promise((ok,ko)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=ko;document.head.append(s)});
 $('exp').onclick=async()=>{if(!pages.length)return alert('No pages');const b=$('exp');b.disabled=true;let w,n=0,body='';
  try{if(cfg.txt){b.textContent='Loading OCR…';window.Tesseract||await load('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');w=await Tesseract.createWorker(cfg.lang)}
   for(const p of pages)for(const c of await cut(p.blob)){b.textContent='Page '+ ++n;body+=`<section id="p${n}"><h2>Page ${n}</h2>`;
-   if(cfg.img)body+=`<img src="${c.toDataURL('image/jpeg',.8)}" alt="Page ${n}">`;
-   if(w)body+=(await w.recognize(c)).data.text.replace(/-\n(?=\S)/g,'').split(/\n\s*\n/).filter(t=>t.trim()).map(t=>`<p>${esc(t.replace(/\s*\n\s*/g,' ').trim())}</p>`).join('\n');
-   body+='</section>\n'}
+   body+=(w?await layout(w,c,cfg.img):`<img src="${c.toDataURL('image/jpeg',.8)}" alt="Page ${n}">`)+'</section>\n'}
   const html=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(cfg.title)}</title>
-<style>body{max-width:42em;margin:auto;padding:1em;font:18px/1.6 Georgia,serif}img{max-width:100%;border:1px solid #ccc}h2{font:12px sans-serif;color:#888;border-top:1px solid #ddd;padding-top:1em}</style></head>
-<body><h1>${esc(cfg.title)}</h1>\n${body}</body></html>`;
+<style>body{max-width:60em;margin:auto;padding:1em;font:18px/1.6 Georgia,serif}img{max-width:100%;display:block;margin:.5em 0}.row{display:flex;gap:1em;align-items:flex-start}.row>div{min-width:0}.t{flex:1 1 0;min-width:50%!important}h2{font:12px sans-serif;color:#888;border-top:1px solid #ddd;padding-top:1em}
+img.big{position:fixed;inset:0;width:100%;height:100%;max-width:none;margin:0;object-fit:contain;background:#000e;z-index:9}</style></head>
+<body onclick="event.target.tagName=='IMG'&&event.target.classList.toggle('big')"><h1>${esc(cfg.title)}</h1>\n${body}</body></html>`;
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([html],{type:'text/html'}));a.download=cfg.title.replace(/[^\w-]+/g,'_')+'.html';a.click()}
  catch(e){alert('Export failed: '+e.message)}
  finally{w&&w.terminate();b.disabled=false;b.textContent='Export'}};
