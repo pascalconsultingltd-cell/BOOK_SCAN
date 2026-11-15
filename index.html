@@ -35,15 +35,16 @@ details{padding:4px 8px}summary{padding:6px 0}label{display:flex;gap:8px;align-i
 <div id="thumbs" class="grid"></div></div>
 <div id="ex" hidden><header><button id="back">◀ Camera</button><b>Export HTML</b></header>
 <label>Title <input data-k="title"></label>
-<label><input type="checkbox" data-k="img"> Include page images</label>
-<label><input type="checkbox" data-k="txt"> OCR text, language <select data-k="lang"><option>eng</option><option>fra</option><option value="eng+fra">eng+fra</option><option>deu</option><option>spa</option><option>ita</option></select></label>
+<label><input type="checkbox" data-k="clean"> Remove shadows (hand, phone)</label>
+<label><input type="checkbox" data-k="txt"> OCR text (slow, rough), language <select data-k="lang"><option>eng</option><option>fra</option><option value="eng+fra">eng+fra</option><option>deu</option><option>spa</option><option>ita</option></select></label>
+<label><input type="checkbox" data-k="img"> With OCR: keep pictures beside text</label>
 <header><button id="all">All</button><button id="none">None</button><button id="exp" class="on">Export</button><span id="prog"></span></header>
 <div id="pick" class="grid"></div>
 <p><button id="clr" style="background:var(--bad)">Delete all spreads</button></p></div>
 <script>
 const $=id=>document.getElementById(id), v=$('v'), st=$('status');
-const cfg={cam:'user',top:3,bottom:3,left:3,right:3,split:true,mid:50,sens:6,still:1.2,title:'book',img:true,txt:true,lang:'eng'};
-try{Object.assign(cfg,JSON.parse(localStorage.bookscan||'{}'))}catch{}
+const cfg={cam:'user',top:3,bottom:3,left:3,right:3,split:true,mid:50,sens:6,still:1.2,title:'book',img:true,txt:false,clean:true,lang:'eng',v:2};
+try{const o=JSON.parse(localStorage.bookscan||'{}');if(o.v!=2)Object.assign(o,{txt:false,clean:true,v:2});Object.assign(cfg,o)}catch{}
 const save=()=>{try{localStorage.bookscan=JSON.stringify(cfg)}catch{};draw()},sync=()=>document.querySelectorAll('[data-k]').forEach(e=>e.type=='checkbox'?e.checked=cfg[e.dataset.k]:e.value=cfg[e.dataset.k]);
 document.querySelectorAll('[data-k]').forEach(e=>{const k=e.dataset.k,ck=e.type=='checkbox';e.oninput=()=>{cfg[k]=ck?e.checked:e.type=='range'?+e.value:e.value;save()}});sync();
 function draw(){Object.assign($('crop').style,{top:cfg.top+'%',bottom:cfg.bottom+'%',left:cfg.left+'%',right:cfg.right+'%'});
@@ -116,6 +117,15 @@ async function cut({blob,crop:k=cfg}){const b=await createImageBitmap(blob),W=b.
  const m=Math.min(x1-1,Math.max(x0+1,W*k.mid/100));
  return (cfg.split?[[x0,m],[m,x1]]:[[x0,x1]]).map(([a,z])=>{const c=document.createElement('canvas');c.width=z-a;c.height=y1-y0;c.getContext('2d').drawImage(b,a,y0,z-a,y1-y0,0,0,z-a,y1-y0);return c})}
 // layout: pass 1 finds confident words, grid-dilated into text zones (split where the left edge jumps); pass 2 reads each zone alone; the rest stays picture
+// shadow removal: divide by paper brightness (90th percentile luma per block of a 64-wide grid, smoothly upscaled); dark areas (table, figures) left alone
+function clean(c){const W=c.width,H=c.height,gw=64,gh=Math.max(1,Math.round(gw*H/W)),x=c.getContext('2d'),im=x.getImageData(0,0,W,H),d=im.data,s=document.createElement('canvas');s.width=gw;s.height=gh;
+ const sx=s.getContext('2d'),g=sx.createImageData(gw,gh);
+ for(let by=0;by<gh;by++)for(let bx=0;bx<gw;bx++){const hs=new Uint32Array(256);let n=0;
+  for(let y=by*H/gh|0;y<(by+1)*H/gh;y+=2)for(let i=y*W+(bx*W/gw|0);i<y*W+(bx+1)*W/gw;i+=2){hs[(d[i*4]*.3+d[i*4+1]*.59+d[i*4+2]*.11)|0]++;n++}
+  let k=255,acc=0;while(k>0&&(acc+=hs[k])<n*.1)k--;const j=(by*gw+bx)*4;g.data[j]=g.data[j+1]=g.data[j+2]=Math.max(k,20);g.data[j+3]=255}
+ sx.putImageData(g,0,0);const b=document.createElement('canvas');b.width=W;b.height=H;const bxx=b.getContext('2d');bxx.imageSmoothingQuality='high';bxx.drawImage(s,0,0,W,H);
+ const bg=bxx.getImageData(0,0,W,H).data;for(let i=0;i<d.length;i+=4){const p=bg[i],f=1+(270/p-1)*Math.max(0,Math.min(1,(p-70)/50));d[i]=Math.min(255,d[i]*f);d[i+1]=Math.min(255,d[i+1]*f);d[i+2]=Math.min(255,d[i+2]*f)}
+ const o=document.createElement('canvas');o.width=W;o.height=H;o.getContext('2d').putImageData(im,0,0);return o}
 // blank page: almost no sharp edges (text ~18%, figures ~2%, blank with show-through ~0.1%), 5% border ignored
 function blank(c){const w=c.width,h=c.height,d=c.getContext('2d').getImageData(0,0,w,h).data,g=i=>d[i*4]+d[i*4+1]+d[i*4+2];let n=0,t=0;
  for(let y=h*.05|0;y<h*.95;y++)for(let i=y*w+(w*.05|0);i<y*w+w*.95;i++){t++;if(Math.abs(4*g(i)-g(i-1)-g(i+1)-g(i-w)-g(i+w))>60)n++}return n/t<.01}
@@ -169,7 +179,7 @@ const load=src=>new Promise((ok,ko)=>{const s=document.createElement('script');s
 $('exp').onclick=async()=>{const todo=pages.filter(p=>sel.has(p.id));if(!todo.length)return alert('No spreads selected');
  ac=ac||new AudioContext();ac.resume();keep();const b=$('exp'),pr=$('prog');b.disabled=true;let w,n=0,skip=0,body='';
  try{if(cfg.txt){pr.textContent='Loading OCR…';window.Tesseract||await load('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');w=await Tesseract.createWorker(cfg.lang)}
-  for(const [i,p] of todo.entries())for(const c of await cut(p)){if(blank(c)){skip++;continue}pr.textContent=`Spread ${i+1}/${todo.length}, page ${++n}`;body+=`<section id="p${n}"><h2>Page ${n}</h2>`;
+  for(const [i,p] of todo.entries())for(let c of await cut(p)){if(cfg.clean)c=clean(c);if(blank(c)){skip++;continue}pr.textContent=`Spread ${i+1}/${todo.length}, page ${++n}`;body+=`<section id="p${n}"><h2>Page ${n}</h2>`;
    body+=(w?await layout(w,c,cfg.img):`<img src="${c.toDataURL('image/jpeg',.8)}" alt="Page ${n}">`)+'</section>\n'}
   const html=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(cfg.title)}</title>
 <style>body{max-width:60em;margin:auto;padding:1em;font:18px/1.6 Georgia,serif}img{max-width:100%;display:block;margin:.5em 0}.row{display:flex;gap:1em;align-items:flex-start}.row>div{min-width:0}.t{flex:1 1 0;min-width:50%!important}h2{font:12px sans-serif;color:#888;border-top:1px solid #ddd;padding-top:1em}
