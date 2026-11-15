@@ -18,7 +18,7 @@ details{padding:4px 8px}summary{padding:6px 0}label{display:flex;gap:8px;align-i
 #thumbs figcaption{position:absolute;top:0;left:0;background:#000b;padding:0 5px}
 </style></head><body>
 <header>
-<button id="go">Start camera</button><button id="auto">Auto</button><button id="snap">Snap</button><span id="n">0</span>
+<select id="cam" data-k="cam"><option value="user">Front cam</option><option value="environment">Back cam</option></select><button id="go">Start camera</button><button id="auto">Auto</button><button id="snap">Snap</button><span id="n">0</span>
 </header>
 <div id="stage"><video id="v" playsinline muted></video><div id="crop"></div><div id="mid"></div><div id="status">Press Start camera</div><div id="flash"></div></div>
 <div id="meter"><div></div><i></i></div>
@@ -40,7 +40,7 @@ details{padding:4px 8px}summary{padding:6px 0}label{display:flex;gap:8px;align-i
 <div id="thumbs"></div>
 <script>
 const $=id=>document.getElementById(id), v=$('v'), st=$('status');
-const cfg={top:3,bottom:3,left:3,right:3,split:true,mid:50,sens:6,still:1.2,title:'book',img:true,txt:true,lang:'eng'};
+const cfg={cam:'user',top:3,bottom:3,left:3,right:3,split:true,mid:50,sens:6,still:1.2,title:'book',img:true,txt:true,lang:'eng'};
 try{Object.assign(cfg,JSON.parse(localStorage.bookscan||'{}'))}catch{}
 document.querySelectorAll('[data-k]').forEach(e=>{const k=e.dataset.k,ck=e.type=='checkbox';ck?e.checked=cfg[k]:e.value=cfg[k];
  e.oninput=()=>{cfg[k]=ck?e.checked:e.type=='range'?+e.value:e.value;try{localStorage.bookscan=JSON.stringify(cfg)}catch{};draw()}});
@@ -60,11 +60,14 @@ function beep(){const o=ac.createOscillator(),g=ac.createGain();o.frequency.valu
 function snap(){if(!v.videoWidth)return;const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
  beep();$('flash').style.transition='none';$('flash').style.opacity=.7;requestAnimationFrame(()=>{$('flash').style.transition='';$('flash').style.opacity=0});
  last=Date.now();c.toBlob(async blob=>{const id=await req(store('readwrite').add({blob}));thumb({id,blob})},'image/jpeg',.92)}
-$('go').onclick=async()=>{ac=ac||new AudioContext();ac.resume();
- try{v.srcObject=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:'environment',width:{ideal:4096},height:{ideal:2160}}});await v.play()}
- catch(e){st.textContent='Camera error: '+e.message+(isSecureContext?'':' (needs https)');return}
+// front cam default: you see the book in the preview while turning pages
+async function cam(){v.srcObject?.getTracks().forEach(t=>t.stop());prev=null;
+ try{v.srcObject=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:cfg.cam,width:{ideal:4096},height:{ideal:2160}}});await v.play();st.textContent=v.videoWidth+'x'+v.videoHeight+' ready';return true}
+ catch(e){st.textContent='Camera error: '+e.message+(isSecureContext?'':' (needs https)')}}
+$('cam').onchange=()=>v.srcObject&&cam();
+$('go').onclick=async()=>{ac=ac||new AudioContext();ac.resume();if(!await cam())return;
  try{await navigator.wakeLock.request('screen')}catch{}
- $('go').style.display='none';st.textContent=v.videoWidth+'x'+v.videoHeight+' ready';setInterval(watch,150)};
+ $('go').style.display='none';setInterval(watch,150)};
 $('auto').onclick=()=>{auto=!auto;$('auto').classList.toggle('on',auto);state='turn';stillSince=0};
 $('snap').onclick=v.onclick=()=>{ac&&snap()};
 // motion: mean grey diff of a tiny frame; wait for movement (page turn), then stillness, then snap
