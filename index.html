@@ -29,7 +29,7 @@ details{padding:4px 8px}summary{padding:6px 0}label{display:flex;gap:8px;align-i
 <label>Right <input type="range" data-k="right" min="0" max="45"></label>
 <label><input type="checkbox" data-k="split"> Split into 2 pages, gutter at <input type="range" data-k="mid" min="20" max="80"></label>
 <button id="fit">Fit to book now</button> (Auto does this on its first photo)
-<label>Stillness threshold <input type="range" data-k="sens" min="1" max="30"></label>
+<label>Motion threshold % <input type="range" data-k="sens" min="1" max="30"></label>
 <label>Still for (s) <input type="range" data-k="still" min="0.4" max="4" step="0.2"></label>
 </details>
 <div id="thumbs" class="grid"></div></div>
@@ -47,7 +47,7 @@ try{Object.assign(cfg,JSON.parse(localStorage.bookscan||'{}'))}catch{}
 const save=()=>{try{localStorage.bookscan=JSON.stringify(cfg)}catch{};draw()},sync=()=>document.querySelectorAll('[data-k]').forEach(e=>e.type=='checkbox'?e.checked=cfg[e.dataset.k]:e.value=cfg[e.dataset.k]);
 document.querySelectorAll('[data-k]').forEach(e=>{const k=e.dataset.k,ck=e.type=='checkbox';e.oninput=()=>{cfg[k]=ck?e.checked:e.type=='range'?+e.value:e.value;save()}});sync();
 function draw(){Object.assign($('crop').style,{top:cfg.top+'%',bottom:cfg.bottom+'%',left:cfg.left+'%',right:cfg.right+'%'});
- $('mid').style.left=cfg.mid+'%';$('mid').style.display=cfg.split?'':'none';$('meter').querySelector('i').style.left=cfg.sens*2+'%'}
+ $('mid').style.left=cfg.mid+'%';$('mid').style.display=cfg.split?'':'none';$('meter').querySelector('i').style.left=cfg.sens*4+'%'}
 draw();
 // pages persist in IndexedDB so a reload does not lose the scan
 let db,pages=[];const req=r=>new Promise((ok,ko)=>{r.onsuccess=()=>ok(r.result);r.onerror=()=>ko(r.error)}),store=m=>db.transaction('pages',m).objectStore('pages');
@@ -57,7 +57,7 @@ function thumb(p){pages.push(p);const f=document.createElement('figure');f.inner
  f.onclick=async()=>{if(!confirm('Delete this spread?'))return;await req(store('readwrite').delete(p.id));pages.splice(pages.indexOf(p),1);f.remove();renum()};
  $('thumbs').prepend(f);renum()}
 function renum(){$('n').textContent=pages.length+' spreads';[...$('thumbs').children].forEach((f,i,a)=>f.lastChild.textContent=a.length-i)}
-let ac,timer,cal=false,sel=new Set(),auto=false,state='turn',stillSince=0,last=0,prev;
+let ac,timer,ref,cal=false,sel=new Set(),auto=false,state='turn',stillSince=0,last=0,prev;
 function beep(){const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=1200;g.gain.value=.3;o.connect(g).connect(ac.destination);o.start();o.stop(ac.currentTime+.15);navigator.vibrate?.(80)}
 // fit crop + gutter to the book: bright blobs (paper, above Otsu threshold) at least 30% of the biggest, merged (gutter may split them); gutter = darkest column near its middle
 function fit(){if(!v.videoWidth)return;const w=160,h=Math.round(w*v.videoHeight/v.videoWidth),k=document.createElement('canvas');k.width=w;k.height=h;
@@ -71,8 +71,11 @@ function fit(){if(!v.videoWidth)return;const w=160,h=Math.round(w*v.videoHeight/
   blobs.push([n,b])}
  const top=Math.max(0,...blobs.map(b=>b[0])),bb=blobs.filter(b=>b[0]>top*.3).map(b=>b[1]).reduce((a,b)=>[Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.max(a[2],b[2]),Math.max(a[3],b[3])],[w,h,0,0]);
  if(top<N*.1)return st.textContent='Book not found';
+ // only one page found (not wider than tall): the other page is on the brighter side, mirror the box across that edge
+ let gx;if(bb[2]-bb[0]<(bb[3]-bb[1])*1.1){const pw=bb[2]-bb[0],side=o=>{let m=0;o=Math.max(0,Math.min(w-1,o));for(let py=bb[1];py<=bb[3];py++)m+=g[py*w+o];return m};
+  if(side(bb[2]+4)>side(bb[0]-4)){gx=bb[2];bb[2]=Math.min(w-1,bb[2]+pw)}else{gx=bb[0];bb[0]=Math.max(0,bb[0]-pw)}}
  const c=v=>Math.max(0,Math.min(45,Math.round(v)));Object.assign(cfg,{left:c(bb[0]/w*100-1),top:c(bb[1]/h*100-1),right:c((w-1-bb[2])/w*100-1),bottom:c((h-1-bb[3])/h*100-1)});
- let gx=0,gm=1e9;for(let px=Math.round(bb[0]+(bb[2]-bb[0])*.35);px<=bb[0]+(bb[2]-bb[0])*.65;px++){let m=0;for(let py=bb[1];py<=bb[3];py++)for(let q=-1;q<=1;q++)m+=g[py*w+px+q];if(m<gm){gm=m;gx=px}}
+ if(gx==null){let gm=1e9;for(let px=Math.round(bb[0]+(bb[2]-bb[0])*.35);px<=bb[0]+(bb[2]-bb[0])*.65;px++){let m=0;for(let py=bb[1];py<=bb[3];py++)for(let q=-1;q<=1;q++)m+=g[py*w+px+q];if(m<gm){gm=m;gx=px}}}
  cfg.mid=Math.max(20,Math.min(80,Math.round(gx/w*100)));sync();save()}
 $('fit').onclick=fit;
 function snap(){if(!v.videoWidth)return;if(cal){cal=false;fit()}const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
@@ -90,11 +93,14 @@ $('auto').onclick=()=>{auto=!auto;cal=auto;$('auto').classList.toggle('on',auto)
 $('snap').onclick=v.onclick=()=>{ac&&snap()};
 // motion: mean grey diff of a tiny frame; wait for movement (page turn), then stillness, then snap
 const sm=document.createElement('canvas');sm.width=80;sm.height=60;const sx=sm.getContext('2d',{willReadFrequently:true});
-function watch(){if(!v.videoWidth)return;sx.drawImage(v,0,0,80,60);const d=sx.getImageData(0,0,80,60).data,g=new Uint8Array(4800);let diff=0;
- for(let i=0;i<4800;i++){g[i]=(d[i*4]+d[i*4+1]+d[i*4+2])/3;if(prev)diff+=Math.abs(g[i]-prev[i])}prev=g;diff/=4800;
- $('meter').firstChild.style.width=Math.min(100,diff*2)+'%';if(!auto)return;const now=Date.now();
- if(state=='turn'){st.textContent='Turn page / show book';if(diff>cfg.sens*2&&now-last>800){state='wait';stillSince=0}}
- else if(diff<cfg.sens){stillSince=stillSince||now;st.textContent='Hold still…';if(now-stillSince>cfg.still*1000){snap();state='turn'}}
+// motion = % of a tiny frame's pixels changed by >16 grey levels; ignores noise, catches a slow hand
+const chg=(a,b)=>{let n=0;for(let i=0;i<4800;i++)if(Math.abs(a[i]-b[i])>16)n++;return n/48};
+function watch(){if(!v.videoWidth)return;sx.drawImage(v,0,0,80,60);const d=sx.getImageData(0,0,80,60).data,g=new Uint8Array(4800);
+ for(let i=0;i<4800;i++)g[i]=(d[i*4]+d[i*4+1]+d[i*4+2])/3;const m=prev?chg(g,prev):0;prev=g;
+ $('meter').firstChild.style.width=Math.min(100,m*2)+'%';if(!auto)return;const now=Date.now();
+ if(state=='turn'){st.textContent='Turn page / show book';if(m>cfg.sens*2&&now-last>800){state='wait';stillSince=0}}
+ // still = almost nothing changes frame to frame AND since the hold began (slow moves add up)
+ else if(m<cfg.sens/3){if(!stillSince||chg(g,ref)>cfg.sens/4){stillSince=now;ref=g}st.textContent='Hold still…';if(now-stillSince>cfg.still*1000){snap();state='turn'}}
  else{stillSince=0;st.textContent='Moving'}}
 // crop + split one spread into page canvases
 async function cut(blob){const b=await createImageBitmap(blob),W=b.width,H=b.height,x0=W*cfg.left/100,x1=W*(1-cfg.right/100),y0=H*cfg.top/100,y1=H*(1-cfg.bottom/100);
