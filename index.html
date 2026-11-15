@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Book Scan</title>
+<style>
+:root{--bg:#111;--fg:#eee;--acc:#2a7;--bad:#c33}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px system-ui,sans-serif}
+header{display:flex;gap:6px;padding:8px;flex-wrap:wrap;align-items:center}
+button,select,input{font:inherit}button{background:#333;color:var(--fg);border:0;border-radius:8px;padding:10px 14px}
+button.on{background:var(--acc)}#n{margin-left:auto;font-weight:bold}
+#stage{position:relative;background:#000}video{width:100%;display:block;min-height:120px}
+#crop{position:absolute;border:2px solid #0f0;pointer-events:none}#mid{position:absolute;top:0;bottom:0;border-left:2px dashed #0f0;pointer-events:none}
+#status{position:absolute;top:6px;left:6px;background:#000b;padding:4px 8px;border-radius:6px}
+#flash{position:absolute;inset:0;background:#fff;opacity:0;transition:opacity .4s;pointer-events:none}
+#meter{height:6px;background:#333;position:relative}#meter div{height:100%;background:var(--acc);width:0}#meter i{position:absolute;top:0;bottom:0;border-left:2px solid #fff}
+details{padding:4px 8px}summary{padding:6px 0}label{display:flex;gap:8px;align-items:center;margin:6px 0}label input[type=range]{flex:1}
+#thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px;padding:8px}
+#thumbs figure{margin:0;position:relative}#thumbs img{width:100%;display:block}
+#thumbs figcaption{position:absolute;top:0;left:0;background:#000b;padding:0 5px}
+</style></head><body>
+<header>
+<button id="go">Start camera</button><button id="auto">Auto</button><button id="snap">Snap</button><span id="n">0</span>
+</header>
+<div id="stage"><video id="v" playsinline muted></video><div id="crop"></div><div id="mid"></div><div id="status">Press Start camera</div><div id="flash"></div></div>
+<div id="meter"><div></div><i></i></div>
+<details><summary>Crop / detection</summary>
+<label>Top <input type="range" data-k="top" min="0" max="45"></label>
+<label>Bottom <input type="range" data-k="bottom" min="0" max="45"></label>
+<label>Left <input type="range" data-k="left" min="0" max="45"></label>
+<label>Right <input type="range" data-k="right" min="0" max="45"></label>
+<label><input type="checkbox" data-k="split"> Split into 2 pages, gutter at <input type="range" data-k="mid" min="20" max="80"></label>
+<label>Stillness threshold <input type="range" data-k="sens" min="1" max="30"></label>
+<label>Still for (s) <input type="range" data-k="still" min="0.4" max="4" step="0.2"></label>
+</details>
+<details><summary>Export HTML</summary>
+<label>Title <input data-k="title"></label>
+<label><input type="checkbox" data-k="img"> Include page images</label>
+<label><input type="checkbox" data-k="txt"> OCR text, language <select data-k="lang"><option>eng</option><option>fra</option><option value="eng+fra">eng+fra</option><option>deu</option><option>spa</option><option>ita</option></select></label>
+<button id="exp">Export</button> <button id="clr" style="background:var(--bad)">Delete all</button>
+</details>
+<div id="thumbs"></div>
+<script>
+const $=id=>document.getElementById(id), v=$('v'), st=$('status');
+const cfg={top:3,bottom:3,left:3,right:3,split:true,mid:50,sens:6,still:1.2,title:'book',img:true,txt:true,lang:'eng'};
+try{Object.assign(cfg,JSON.parse(localStorage.bookscan||'{}'))}catch{}
+document.querySelectorAll('[data-k]').forEach(e=>{const k=e.dataset.k,ck=e.type=='checkbox';ck?e.checked=cfg[k]:e.value=cfg[k];
+ e.oninput=()=>{cfg[k]=ck?e.checked:e.type=='range'?+e.value:e.value;try{localStorage.bookscan=JSON.stringify(cfg)}catch{};draw()}});
+function draw(){Object.assign($('crop').style,{top:cfg.top+'%',bottom:cfg.bottom+'%',left:cfg.left+'%',right:cfg.right+'%'});
+ $('mid').style.left=cfg.mid+'%';$('mid').style.display=cfg.split?'':'none';$('meter').querySelector('i').style.left=cfg.sens*2+'%'}
+draw();
+// pages persist in IndexedDB so a reload does not lose the scan
+let db,pages=[];const req=r=>new Promise((ok,ko)=>{r.onsuccess=()=>ok(r.result);r.onerror=()=>ko(r.error)}),store=m=>db.transaction('pages',m).objectStore('pages');
+const open=indexedDB.open('bookscan',1);open.onupgradeneeded=()=>open.result.createObjectStore('pages',{keyPath:'id',autoIncrement:true});
+open.onsuccess=async()=>{db=open.result;(await req(store('readonly').getAll())).forEach(thumb);renum()};
+function thumb(p){pages.push(p);const f=document.createElement('figure');f.innerHTML=`<img src="${URL.createObjectURL(p.blob)}"><figcaption>${pages.length}</figcaption>`;
+ f.onclick=async()=>{if(!confirm('Delete this spread?'))return;await req(store('readwrite').delete(p.id));pages.splice(pages.indexOf(p),1);f.remove();renum()};
+ $('thumbs').prepend(f);renum()}
+function renum(){$('n').textContent=pages.length+' spreads';[...$('thumbs').children].forEach((f,i,a)=>f.lastChild.textContent=a.length-i)}
+let ac,auto=false,state='turn',stillSince=0,last=0,prev;
+function beep(){const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=1200;g.gain.value=.3;o.connect(g).connect(ac.destination);o.start();o.stop(ac.currentTime+.15);navigator.vibrate?.(80)}
+function snap(){if(!v.videoWidth)return;const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
+ beep();$('flash').style.transition='none';$('flash').style.opacity=.7;requestAnimationFrame(()=>{$('flash').style.transition='';$('flash').style.opacity=0});
+ last=Date.now();c.toBlob(async blob=>{const id=await req(store('readwrite').add({blob}));thumb({id,blob})},'image/jpeg',.92)}
+$('go').onclick=async()=>{ac=ac||new AudioContext();ac.resume();
+ try{v.srcObject=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:'environment',width:{ideal:4096},height:{ideal:2160}}});await v.play()}
+ catch(e){st.textContent='Camera error: '+e.message+(isSecureContext?'':' (needs https)');return}
+ try{await navigator.wakeLock.request('screen')}catch{}
+ $('go').style.display='none';st.textContent=v.videoWidth+'x'+v.videoHeight+' ready';setInterval(watch,150)};
+$('auto').onclick=()=>{auto=!auto;$('auto').classList.toggle('on',auto);state='turn';stillSince=0};
+$('snap').onclick=v.onclick=()=>{ac&&snap()};
+// motion: mean grey diff of a tiny frame; wait for movement (page turn), then stillness, then snap
+const sm=document.createElement('canvas');sm.width=80;sm.height=60;const sx=sm.getContext('2d',{willReadFrequently:true});
+function watch(){if(!v.videoWidth)return;sx.drawImage(v,0,0,80,60);const d=sx.getImageData(0,0,80,60).data,g=new Uint8Array(4800);let diff=0;
+ for(let i=0;i<4800;i++){g[i]=(d[i*4]+d[i*4+1]+d[i*4+2])/3;if(prev)diff+=Math.abs(g[i]-prev[i])}prev=g;diff/=4800;
+ $('meter').firstChild.style.width=Math.min(100,diff*2)+'%';if(!auto)return;const now=Date.now();
+ if(state=='turn'){st.textContent='Turn page / show book';if(diff>cfg.sens*2&&now-last>800){state='wait';stillSince=0}}
+ else if(diff<cfg.sens){stillSince=stillSince||now;st.textContent='Hold still…';if(now-stillSince>cfg.still*1000){snap();state='turn'}}
+ else{stillSince=0;st.textContent='Moving'}}
+// crop + split one spread into page canvases
+async function cut(blob){const b=await createImageBitmap(blob),W=b.width,H=b.height,x0=W*cfg.left/100,x1=W*(1-cfg.right/100),y0=H*cfg.top/100,y1=H*(1-cfg.bottom/100);
+ const m=Math.min(x1-1,Math.max(x0+1,W*cfg.mid/100));
+ return (cfg.split?[[x0,m],[m,x1]]:[[x0,x1]]).map(([a,z])=>{const c=document.createElement('canvas');c.width=z-a;c.height=y1-y0;c.getContext('2d').drawImage(b,a,y0,z-a,y1-y0,0,0,z-a,y1-y0);return c})}
+const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const load=src=>new Promise((ok,ko)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=ko;document.head.append(s)});
+$('exp').onclick=async()=>{if(!pages.length)return alert('No pages');const b=$('exp');b.disabled=true;let w,n=0,body='';
+ try{if(cfg.txt){b.textContent='Loading OCR…';window.Tesseract||await load('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');w=await Tesseract.createWorker(cfg.lang)}
+  for(const p of pages)for(const c of await cut(p.blob)){b.textContent='Page '+ ++n;body+=`<section id="p${n}"><h2>Page ${n}</h2>`;
+   if(cfg.img)body+=`<img src="${c.toDataURL('image/jpeg',.8)}" alt="Page ${n}">`;
+   if(w)body+=(await w.recognize(c)).data.text.replace(/-\n(?=\S)/g,'').split(/\n\s*\n/).filter(t=>t.trim()).map(t=>`<p>${esc(t.replace(/\s*\n\s*/g,' ').trim())}</p>`).join('\n');
+   body+='</section>\n'}
+  const html=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(cfg.title)}</title>
+<style>body{max-width:42em;margin:auto;padding:1em;font:18px/1.6 Georgia,serif}img{max-width:100%;border:1px solid #ccc}h2{font:12px sans-serif;color:#888;border-top:1px solid #ddd;padding-top:1em}</style></head>
+<body><h1>${esc(cfg.title)}</h1>\n${body}</body></html>`;
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([html],{type:'text/html'}));a.download=cfg.title.replace(/[^\w-]+/g,'_')+'.html';a.click()}
+ catch(e){alert('Export failed: '+e.message)}
+ finally{w&&w.terminate();b.disabled=false;b.textContent='Export'}};
+$('clr').onclick=async()=>{if(!confirm('Delete all '+pages.length+' spreads? Cannot be undone.'))return;await req(store('readwrite').clear());pages=[];$('thumbs').innerHTML='';renum()};
+</script></body></html>
