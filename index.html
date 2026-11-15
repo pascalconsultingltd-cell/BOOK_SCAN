@@ -75,17 +75,24 @@ function fit(src){const w=160,h=Math.round(w*(src.videoHeight||src.height)/(src.
  // only one page found (not wider than tall): the other page is on the brighter side, mirror the box across that edge
  let gx;if(bb[2]-bb[0]<(bb[3]-bb[1])*1.1){const pw=bb[2]-bb[0],side=o=>{let m=0;o=Math.max(0,Math.min(w-1,o));for(let py=bb[1];py<=bb[3];py++)m+=g[py*w+o];return m};
   if(side(bb[2]+4)>side(bb[0]-4)){gx=bb[2];bb[2]=Math.min(w-1,bb[2]+pw)}else{gx=bb[0];bb[0]=Math.max(0,bb[0]-pw)}}
+ // gutter = deepest valley in the middle rows: darker than the brightest column within 8 on BOTH sides (a page/background or shadow step is no valley); ties go to the centre
+ else{const y0=Math.round(bb[1]+(bb[3]-bb[1])*.25),y1=Math.round(bb[3]-(bb[3]-bb[1])*.25),p=[];for(let px=0;px<w;px++){let m=0;for(let py=y0;py<=y1;py++)m+=g[py*w+px];p.push(m)}
+  const hi=(a,z)=>Math.max(...p.slice(Math.max(0,a),Math.max(1,z)));let gm=1e9;
+  for(let px=Math.round(bb[0]+(bb[2]-bb[0])*.3);px<=bb[0]+(bb[2]-bb[0])*.7;px++){const m=p[px]-Math.min(hi(px-8,px),hi(px+1,px+9))+Math.abs(px-(bb[0]+bb[2])/2)*(y1-y0+1)*.5;if(m<gm){gm=m;gx=px}}}
+ // both pages have the same width: a wider side merged with bright background, trim it to the other (unless that one runs off frame)
+ const hl=gx-bb[0],hr=bb[2]-gx;if(hr>hl*1.08&&bb[0]>0)bb[2]=gx+hl;else if(hl>hr*1.08&&bb[2]<w-1)bb[0]=gx-hr;
+ // top/bottom = rows where over a third of the trimmed width is paper (drops background merged above or below)
+ const row=py=>{let n=0;for(let px=bb[0];px<=bb[2];px++)n+=g[py*w+px]>t;return n>(bb[2]-bb[0]+1)/3};while(bb[1]<bb[3]&&!row(bb[1]))bb[1]++;while(bb[3]>bb[1]&&!row(bb[3]))bb[3]--;
  const c=v=>Math.max(0,Math.min(45,Math.round(v))),r={left:c(bb[0]/w*100-1),top:c(bb[1]/h*100-1),right:c((w-1-bb[2])/w*100-1),bottom:c((h-1-bb[3])/h*100-1)};
- r.touch=(bb[0]<=0)+(bb[1]<=0)+(bb[2]>=w-1)+(bb[3]>=h-1);
- if(gx==null){let gm=1e9;for(let px=Math.round(bb[0]+(bb[2]-bb[0])*.35);px<=bb[0]+(bb[2]-bb[0])*.65;px++){let m=0;for(let py=bb[1];py<=bb[3];py++)for(let q=-1;q<=1;q++)m+=g[py*w+px+q];if(m<gm){gm=m;gx=px}}}
- r.mid=Math.max(20,Math.min(80,Math.round(gx/w*100)));return r}
+ // cut off = an outer page edge leaves the frame; book filling the height is fine
+ r.touch=(bb[0]<=0)+(bb[2]>=w-1);r.mid=Math.max(20,Math.min(80,Math.round(gx/w*100)));return r}
 const show=r=>{Object.assign(cfg,{left:r.left,top:r.top,right:r.right,bottom:r.bottom,mid:r.mid});sync();save()};
 $('fit').onclick=()=>{const r=v.videoWidth&&fit(v);r?show(r):say('Book not found',3000)};
 let hold=0;const say=(t,ms)=>{if(ms)hold=Date.now()+ms;else if(Date.now()<hold)return;st.textContent=t};
 function warn(t){say(t,2500);const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=220;g.gain.value=.15;o.connect(g).connect(ac.destination);o.start();o.stop(ac.currentTime+.5);navigator.vibrate?.([200,100,200])}
 // auto: refit the box to the book in every photo; a photo where the book is cut off is kept but marked bad (unticked for export)
 function snap(manual){if(!v.videoWidth)return;const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
- const r=fit(c),bad=manual?'':!r?'book not found':r.touch&&r.touch<4?'book cut off':'';
+ const r=fit(c),bad=manual?'':!r?'book not found':r.touch?'book cut off':'';
  if(r&&!bad)show(r);const crop=r&&{left:r.left,top:r.top,right:r.right,bottom:r.bottom,mid:r.mid};
  bad?warn('Kept but marked ✗ ('+bad+'): show it again to redo'):beep();$('flash').style.transition='none';$('flash').style.opacity=.7;requestAnimationFrame(()=>{$('flash').style.transition='';$('flash').style.opacity=0});
  last=Date.now();c.toBlob(async blob=>{const id=await req(store('readwrite').add({blob,crop,bad}));thumb({id,blob,crop,bad})},'image/jpeg',.92)}
@@ -101,14 +108,14 @@ $('auto').onclick=()=>{auto=!auto;$('auto').classList.toggle('on',auto);state='t
 $('snap').onclick=v.onclick=()=>{ac&&snap(true)};
 // motion: mean grey diff of a tiny frame; wait for movement (page turn), then stillness, then snap
 const sm=document.createElement('canvas');sm.width=80;sm.height=60;const sx=sm.getContext('2d',{willReadFrequently:true});
-// motion = % of a tiny frame's pixels changed by >16 grey levels; ignores noise, catches a slow hand
-const chg=(a,b)=>{let n=0;for(let i=0;i<4800;i++)if(Math.abs(a[i]-b[i])>16)n++;return n/48};
+// motion = % of a tiny frame's pixels changed by >16 grey levels, minus any overall brightness shift (auto-exposure); ignores noise, catches a slow hand
+const chg=(a,b)=>{let o=0,n=0;for(let i=0;i<4800;i++)o+=a[i]-b[i];o/=4800;for(let i=0;i<4800;i++)if(Math.abs(a[i]-b[i]-o)>16)n++;return n/48};
 function watch(){if(!v.videoWidth)return;sx.drawImage(v,0,0,80,60);const d=sx.getImageData(0,0,80,60).data,g=new Uint8Array(4800);
  for(let i=0;i<4800;i++)g[i]=(d[i*4]+d[i*4+1]+d[i*4+2])/3;const m=prev?chg(g,prev):0;prev=g;
  $('meter').firstChild.style.width=Math.min(100,m*2)+'%';if(!auto)return;const now=Date.now();
  if(state=='turn'){say('Turn page / show book');if(m>cfg.sens*2&&now-last>800){state='wait';stillSince=0}}
  // still = almost nothing changes frame to frame AND since the hold began (slow moves add up)
- else if(m<cfg.sens/3){if(!stillSince||chg(g,ref)>cfg.sens/4){stillSince=now;ref=g}say('Hold still…');if(now-stillSince>cfg.still*1000){state='turn';snap()}}
+ else if(m<cfg.sens/2){if(!stillSince||chg(g,ref)>cfg.sens/2){stillSince=now;ref=g}say('Hold still…');if(now-stillSince>cfg.still*1000){state='turn';snap()}}
  else{stillSince=0;say('Moving')}}
 // crop + split one spread into page canvases
 async function cut({blob,crop:k=cfg}){const b=await createImageBitmap(blob),W=b.width,H=b.height,x0=W*k.left/100,x1=W*(1-k.right/100),y0=H*k.top/100,y1=H*(1-k.bottom/100);
