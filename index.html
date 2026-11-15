@@ -15,7 +15,7 @@ button.on{background:var(--acc)}#n{margin-left:auto;font-weight:bold}
 details{padding:4px 8px}summary{padding:6px 0}label{display:flex;gap:8px;align-items:center;margin:6px 0}label input[type=range]{flex:1}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px;padding:8px}
 .grid figure{margin:0;position:relative}.grid img{width:100%;display:block}
-.grid figcaption{position:absolute;top:0;left:0;background:#000b;padding:0 5px}.grid .off img{opacity:.25}#ex{padding:0 8px}
+.grid figcaption{position:absolute;top:0;left:0;background:#000b;padding:0 5px}.grid .off img{opacity:.25}.grid .bad{outline:3px solid var(--bad)}.grid .bad figcaption{background:var(--bad)}.grid .bad figcaption::after{content:' ✗'}#ex{padding:0 8px}
 </style></head><body>
 <div id="scan"><header>
 <select id="cam" data-k="cam"><option value="user">Front cam</option><option value="environment">Back cam</option></select><button id="go">Start camera</button><button id="auto">Auto</button><button id="snap">Snap</button><button id="toexp">Export…</button><span id="n">0</span>
@@ -38,7 +38,7 @@ details{padding:4px 8px}summary{padding:6px 0}label{display:flex;gap:8px;align-i
 <label><input type="checkbox" data-k="clean"> Remove shadows (hand, phone)</label>
 <label><input type="checkbox" data-k="txt"> OCR text (slow, rough), language <select data-k="lang"><option>eng</option><option>fra</option><option value="eng+fra">eng+fra</option><option>deu</option><option>spa</option><option>ita</option></select></label>
 <label><input type="checkbox" data-k="img"> With OCR: keep pictures beside text</label>
-<header><button id="all">All</button><button id="none">None</button><button id="exp" class="on">Export</button><span id="prog"></span></header>
+<p>Red ✗ = book was cut off; unticked, tap to include.</p><header><button id="all">All</button><button id="none">None</button><button id="exp" class="on">Export</button><span id="prog"></span></header>
 <div id="pick" class="grid"></div>
 <p><button id="clr" style="background:var(--bad)">Delete all spreads</button></p></div>
 <script>
@@ -54,7 +54,7 @@ draw();
 let db,pages=[];const req=r=>new Promise((ok,ko)=>{r.onsuccess=()=>ok(r.result);r.onerror=()=>ko(r.error)}),store=m=>db.transaction('pages',m).objectStore('pages');
 const open=indexedDB.open('bookscan',1);open.onupgradeneeded=()=>open.result.createObjectStore('pages',{keyPath:'id',autoIncrement:true});
 open.onsuccess=async()=>{db=open.result;(await req(store('readonly').getAll())).forEach(thumb);renum()};
-function thumb(p){pages.push(p);const f=document.createElement('figure');f.innerHTML=`<img src="${p.url=URL.createObjectURL(p.blob)}"><figcaption>${pages.length}</figcaption>`;
+function thumb(p){pages.push(p);const f=document.createElement('figure');f.classList.toggle('bad',!!p.bad);f.title=p.bad||'';f.innerHTML=`<img src="${p.url=URL.createObjectURL(p.blob)}"><figcaption>${pages.length}</figcaption>`;
  f.onclick=async()=>{if(!confirm('Delete this spread?'))return;await req(store('readwrite').delete(p.id));pages.splice(pages.indexOf(p),1);f.remove();renum()};
  $('thumbs').prepend(f);renum()}
 function renum(){$('n').textContent=pages.length+' spreads';[...$('thumbs').children].forEach((f,i,a)=>f.lastChild.textContent=a.length-i)}
@@ -83,14 +83,12 @@ const show=r=>{Object.assign(cfg,{left:r.left,top:r.top,right:r.right,bottom:r.b
 $('fit').onclick=()=>{const r=v.videoWidth&&fit(v);r?show(r):say('Book not found',3000)};
 let hold=0;const say=(t,ms)=>{if(ms)hold=Date.now()+ms;else if(Date.now()<hold)return;st.textContent=t};
 function warn(t){say(t,2500);const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=220;g.gain.value=.15;o.connect(g).connect(ac.destination);o.start();o.stop(ac.currentTime+.5);navigator.vibrate?.([200,100,200])}
-// auto: refit the box to the book in every photo; refuse photos where the book is cut off by the frame
+// auto: refit the box to the book in every photo; a photo where the book is cut off is kept but marked bad (unticked for export)
 function snap(manual){if(!v.videoWidth)return;const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
- const r=fit(c);
- if(!manual){if(!r||r.touch&&r.touch<4){state='turn';return warn(r?'Book cut off: move it fully into view':'Book not found')}
-}
- if(r)show(r);const crop=r&&{left:r.left,top:r.top,right:r.right,bottom:r.bottom,mid:r.mid};
- beep();$('flash').style.transition='none';$('flash').style.opacity=.7;requestAnimationFrame(()=>{$('flash').style.transition='';$('flash').style.opacity=0});
- last=Date.now();c.toBlob(async blob=>{const id=await req(store('readwrite').add({blob,crop}));thumb({id,blob,crop})},'image/jpeg',.92)}
+ const r=fit(c),bad=manual?'':!r?'book not found':r.touch&&r.touch<4?'book cut off':'';
+ if(r&&!bad)show(r);const crop=r&&{left:r.left,top:r.top,right:r.right,bottom:r.bottom,mid:r.mid};
+ bad?warn('Kept but marked ✗ ('+bad+'): show it again to redo'):beep();$('flash').style.transition='none';$('flash').style.opacity=.7;requestAnimationFrame(()=>{$('flash').style.transition='';$('flash').style.opacity=0});
+ last=Date.now();c.toBlob(async blob=>{const id=await req(store('readwrite').add({blob,crop,bad}));thumb({id,blob,crop,bad})},'image/jpeg',.92)}
 // front cam default: you see the book in the preview while turning pages
 async function cam(){v.srcObject?.getTracks().forEach(t=>t.stop());prev=null;
  try{v.srcObject=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:cfg.cam,width:{ideal:4096},height:{ideal:2160}}});await v.play();st.textContent=v.videoWidth+'x'+v.videoHeight+' ready';return true}
@@ -167,11 +165,11 @@ async function layout(w,c,img){let f=flat(c),d=(await w.recognize(f,{},{blocks:t
  if(img&&H-y>H*.04)out+=crop(c,0,y,W,H);return out}
 // export screen: camera off, tick spreads to export
 const keep=()=>navigator.wakeLock?.request('screen').catch(()=>{});
-function pick(){$('pick').innerHTML='';pages.forEach((p,i)=>{const f=document.createElement('figure');f.innerHTML=`<img src="${p.url}"><figcaption>${i+1}</figcaption>`;
+function pick(){$('pick').innerHTML='';pages.forEach((p,i)=>{const f=document.createElement('figure');f.classList.toggle('bad',!!p.bad);f.title=p.bad||'';f.innerHTML=`<img src="${p.url}"><figcaption>${i+1}</figcaption>`;
  f.onclick=()=>{sel.has(p.id)?sel.delete(p.id):sel.add(p.id);mark()};$('pick').append(f)});mark()}
-function mark(){[...$('pick').children].forEach((f,i)=>f.className=sel.has(pages[i].id)?'':'off');$('exp').textContent=`Export ${sel.size} spread${sel.size==1?'':'s'}`}
+function mark(){[...$('pick').children].forEach((f,i)=>f.classList.toggle('off',!sel.has(pages[i].id)));$('exp').textContent=`Export ${sel.size} spread${sel.size==1?'':'s'}`}
 $('toexp').onclick=()=>{v.srcObject?.getTracks().forEach(t=>t.stop());v.srcObject=null;clearInterval(timer);auto=false;$('auto').classList.remove('on');$('go').style.display='';st.textContent='Press Start camera';
- sel=new Set(pages.map(p=>p.id));$('scan').hidden=true;$('ex').hidden=false;pick()};
+ sel=new Set(pages.filter(p=>!p.bad).map(p=>p.id));$('scan').hidden=true;$('ex').hidden=false;pick()};
 $('back').onclick=()=>{$('ex').hidden=true;$('scan').hidden=false};
 $('all').onclick=()=>{sel=new Set(pages.map(p=>p.id));mark()};$('none').onclick=()=>{sel.clear();mark()};
 const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
