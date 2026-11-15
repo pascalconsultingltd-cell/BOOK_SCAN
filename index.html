@@ -13,12 +13,12 @@ button.on{background:var(--acc)}#n{margin-left:auto;font-weight:bold}
 #flash{position:absolute;inset:0;background:#fff;opacity:0;transition:opacity .4s;pointer-events:none}
 #meter{height:6px;background:#333;position:relative}#meter div{height:100%;background:var(--acc);width:0}#meter i{position:absolute;top:0;bottom:0;border-left:2px solid #fff}
 details{padding:4px 8px}summary{padding:6px 0}label{display:flex;gap:8px;align-items:center;margin:6px 0}label input[type=range]{flex:1}
-#thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px;padding:8px}
-#thumbs figure{margin:0;position:relative}#thumbs img{width:100%;display:block}
-#thumbs figcaption{position:absolute;top:0;left:0;background:#000b;padding:0 5px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px;padding:8px}
+.grid figure{margin:0;position:relative}.grid img{width:100%;display:block}
+.grid figcaption{position:absolute;top:0;left:0;background:#000b;padding:0 5px}.grid .off img{opacity:.25}#ex{padding:0 8px}
 </style></head><body>
-<header>
-<select id="cam" data-k="cam"><option value="user">Front cam</option><option value="environment">Back cam</option></select><button id="go">Start camera</button><button id="auto">Auto</button><button id="snap">Snap</button><span id="n">0</span>
+<div id="scan"><header>
+<select id="cam" data-k="cam"><option value="user">Front cam</option><option value="environment">Back cam</option></select><button id="go">Start camera</button><button id="auto">Auto</button><button id="snap">Snap</button><button id="toexp">Export…</button><span id="n">0</span>
 </header>
 <div id="stage"><video id="v" playsinline muted></video><div id="crop"></div><div id="mid"></div><div id="status">Press Start camera</div><div id="flash"></div></div>
 <div id="meter"><div></div><i></i></div>
@@ -31,13 +31,14 @@ details{padding:4px 8px}summary{padding:6px 0}label{display:flex;gap:8px;align-i
 <label>Stillness threshold <input type="range" data-k="sens" min="1" max="30"></label>
 <label>Still for (s) <input type="range" data-k="still" min="0.4" max="4" step="0.2"></label>
 </details>
-<details><summary>Export HTML</summary>
+<div id="thumbs" class="grid"></div></div>
+<div id="ex" hidden><header><button id="back">◀ Camera</button><b>Export HTML</b></header>
 <label>Title <input data-k="title"></label>
 <label><input type="checkbox" data-k="img"> Include page images</label>
 <label><input type="checkbox" data-k="txt"> OCR text, language <select data-k="lang"><option>eng</option><option>fra</option><option value="eng+fra">eng+fra</option><option>deu</option><option>spa</option><option>ita</option></select></label>
-<button id="exp">Export</button> <button id="clr" style="background:var(--bad)">Delete all</button>
-</details>
-<div id="thumbs"></div>
+<header><button id="all">All</button><button id="none">None</button><button id="exp" class="on">Export</button><span id="prog"></span></header>
+<div id="pick" class="grid"></div>
+<p><button id="clr" style="background:var(--bad)">Delete all spreads</button></p></div>
 <script>
 const $=id=>document.getElementById(id), v=$('v'), st=$('status');
 const cfg={cam:'user',top:3,bottom:3,left:3,right:3,split:true,mid:50,sens:6,still:1.2,title:'book',img:true,txt:true,lang:'eng'};
@@ -51,11 +52,11 @@ draw();
 let db,pages=[];const req=r=>new Promise((ok,ko)=>{r.onsuccess=()=>ok(r.result);r.onerror=()=>ko(r.error)}),store=m=>db.transaction('pages',m).objectStore('pages');
 const open=indexedDB.open('bookscan',1);open.onupgradeneeded=()=>open.result.createObjectStore('pages',{keyPath:'id',autoIncrement:true});
 open.onsuccess=async()=>{db=open.result;(await req(store('readonly').getAll())).forEach(thumb);renum()};
-function thumb(p){pages.push(p);const f=document.createElement('figure');f.innerHTML=`<img src="${URL.createObjectURL(p.blob)}"><figcaption>${pages.length}</figcaption>`;
+function thumb(p){pages.push(p);const f=document.createElement('figure');f.innerHTML=`<img src="${p.url=URL.createObjectURL(p.blob)}"><figcaption>${pages.length}</figcaption>`;
  f.onclick=async()=>{if(!confirm('Delete this spread?'))return;await req(store('readwrite').delete(p.id));pages.splice(pages.indexOf(p),1);f.remove();renum()};
  $('thumbs').prepend(f);renum()}
 function renum(){$('n').textContent=pages.length+' spreads';[...$('thumbs').children].forEach((f,i,a)=>f.lastChild.textContent=a.length-i)}
-let ac,auto=false,state='turn',stillSince=0,last=0,prev;
+let ac,timer,sel=new Set(),auto=false,state='turn',stillSince=0,last=0,prev;
 function beep(){const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=1200;g.gain.value=.3;o.connect(g).connect(ac.destination);o.start();o.stop(ac.currentTime+.15);navigator.vibrate?.(80)}
 function snap(){if(!v.videoWidth)return;const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
  beep();$('flash').style.transition='none';$('flash').style.opacity=.7;requestAnimationFrame(()=>{$('flash').style.transition='';$('flash').style.opacity=0});
@@ -67,7 +68,7 @@ async function cam(){v.srcObject?.getTracks().forEach(t=>t.stop());prev=null;
 $('cam').onchange=()=>v.srcObject&&cam();
 $('go').onclick=async()=>{ac=ac||new AudioContext();ac.resume();if(!await cam())return;
  try{await navigator.wakeLock.request('screen')}catch{}
- $('go').style.display='none';setInterval(watch,150)};
+ $('go').style.display='none';timer=setInterval(watch,150)};
 $('auto').onclick=()=>{auto=!auto;$('auto').classList.toggle('on',auto);state='turn';stillSince=0};
 $('snap').onclick=v.onclick=()=>{ac&&snap()};
 // motion: mean grey diff of a tiny frame; wait for movement (page turn), then stillness, then snap
@@ -119,18 +120,28 @@ async function layout(w,c,img){let f=flat(c),d=(await w.recognize(f,{},{blocks:t
   if(img&&W-x>W*.1){const p=crop(c,x,r.y0,W,r.y1);if(p)cells+=`<div style="flex:0 1 ${pct(W-x)}">${p}</div>`}
   out+=`<div class="row">${cells}</div>`;y=r.y1}
  if(img&&H-y>H*.04)out+=crop(c,0,y,W,H);return out}
+// export screen: camera off, tick spreads to export
+const keep=()=>navigator.wakeLock?.request('screen').catch(()=>{});
+function pick(){$('pick').innerHTML='';pages.forEach((p,i)=>{const f=document.createElement('figure');f.innerHTML=`<img src="${p.url}"><figcaption>${i+1}</figcaption>`;
+ f.onclick=()=>{sel.has(p.id)?sel.delete(p.id):sel.add(p.id);mark()};$('pick').append(f)});mark()}
+function mark(){[...$('pick').children].forEach((f,i)=>f.className=sel.has(pages[i].id)?'':'off');$('exp').textContent=`Export ${sel.size} spread${sel.size==1?'':'s'}`}
+$('toexp').onclick=()=>{v.srcObject?.getTracks().forEach(t=>t.stop());v.srcObject=null;clearInterval(timer);auto=false;$('auto').classList.remove('on');$('go').style.display='';st.textContent='Press Start camera';
+ sel=new Set(pages.map(p=>p.id));$('scan').hidden=true;$('ex').hidden=false;pick()};
+$('back').onclick=()=>{$('ex').hidden=true;$('scan').hidden=false};
+$('all').onclick=()=>{sel=new Set(pages.map(p=>p.id));mark()};$('none').onclick=()=>{sel.clear();mark()};
 const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const load=src=>new Promise((ok,ko)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=ko;document.head.append(s)});
-$('exp').onclick=async()=>{if(!pages.length)return alert('No pages');const b=$('exp');b.disabled=true;let w,n=0,body='';
- try{if(cfg.txt){b.textContent='Loading OCR…';window.Tesseract||await load('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');w=await Tesseract.createWorker(cfg.lang)}
-  for(const p of pages)for(const c of await cut(p.blob)){b.textContent='Page '+ ++n;body+=`<section id="p${n}"><h2>Page ${n}</h2>`;
+$('exp').onclick=async()=>{const todo=pages.filter(p=>sel.has(p.id));if(!todo.length)return alert('No spreads selected');
+ ac=ac||new AudioContext();ac.resume();keep();const b=$('exp'),pr=$('prog');b.disabled=true;let w,n=0,body='';
+ try{if(cfg.txt){pr.textContent='Loading OCR…';window.Tesseract||await load('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');w=await Tesseract.createWorker(cfg.lang)}
+  for(const [i,p] of todo.entries())for(const c of await cut(p.blob)){pr.textContent=`Spread ${i+1}/${todo.length}, page ${++n}`;body+=`<section id="p${n}"><h2>Page ${n}</h2>`;
    body+=(w?await layout(w,c,cfg.img):`<img src="${c.toDataURL('image/jpeg',.8)}" alt="Page ${n}">`)+'</section>\n'}
   const html=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(cfg.title)}</title>
 <style>body{max-width:60em;margin:auto;padding:1em;font:18px/1.6 Georgia,serif}img{max-width:100%;display:block;margin:.5em 0}.row{display:flex;gap:1em;align-items:flex-start}.row>div{min-width:0}.t{flex:1 1 0;min-width:50%!important}h2{font:12px sans-serif;color:#888;border-top:1px solid #ddd;padding-top:1em}
 img.big{position:fixed;inset:0;width:100%;height:100%;max-width:none;margin:0;object-fit:contain;background:#000e;z-index:9}</style></head>
 <body onclick="event.target.tagName=='IMG'&&event.target.classList.toggle('big')"><h1>${esc(cfg.title)}</h1>\n${body}</body></html>`;
-  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([html],{type:'text/html'}));a.download=cfg.title.replace(/[^\w-]+/g,'_')+'.html';a.click()}
- catch(e){alert('Export failed: '+e.message)}
- finally{w&&w.terminate();b.disabled=false;b.textContent='Export'}};
-$('clr').onclick=async()=>{if(!confirm('Delete all '+pages.length+' spreads? Cannot be undone.'))return;await req(store('readwrite').clear());pages=[];$('thumbs').innerHTML='';renum()};
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([html],{type:'text/html'}));a.download=cfg.title.replace(/[^\w-]+/g,'_')+'.html';a.click();pr.textContent=`Done: ${n} pages`;beep();setTimeout(beep,300);setTimeout(beep,600)}
+ catch(e){pr.textContent='Export failed: '+e.message}
+ finally{w&&w.terminate();b.disabled=false}};
+$('clr').onclick=async()=>{if(!confirm('Delete all '+pages.length+' spreads? Cannot be undone.'))return;await req(store('readwrite').clear());pages=[];sel.clear();$('thumbs').innerHTML='';renum();pick()};
 </script></body></html>
